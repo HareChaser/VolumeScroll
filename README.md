@@ -26,12 +26,13 @@ A lightweight macOS menu bar app that displays your system volume and lets you s
 
 This is a standard macOS security measure for unsigned apps downloaded outside the App Store. The app is completely safe. To fix it:
 
-1. Open the **Terminal** app.
-2. Paste the following command and press Return:
+1. Copy VolumeScroll.app to Applications folder
+2. Open the **Terminal** app.
+3. Paste the following command and press Return:
    ```bash
    xattr -cr /Applications/VolumeScroll.app
    ```
-3. Launch VolumeScroll again!
+4. Launch VolumeScroll again!
 
 ## Build & Run (only for people who want to build the app from source code)
 
