@@ -2,45 +2,46 @@
 
 A lightweight macOS menu bar app that displays your system volume and lets you scroll over it to adjust the volume.
 
-https://github.com/user-attachments/assets/de981287-168f-4a9d-829f-dc574472ef80
-
 ## Features
 
 - Shows a volume icon and percentage in the menu bar
 - Scroll up/down over the icon to raise or lower the volume
-- Supports both trackpad (smooth scrolling) and mouse wheel
-- Icon updates dynamically: muted, low, medium, or high volume
-- Syncs with system volume changes (keyboard shortcuts, Control Center, other apps)
-- Right-click the icon to quit
+- Supports both trackpad and mouse wheel
+- Syncs with system volume changes
 
-## Requirements
+## How to Install
 
-- macOS 13.0 (Ventura) or later
-- Xcode Command Line Tools
+1. Download `VolumeScroll.zip` from the [GitHub release page](https://github.com/HareChaser/VolumeScroll/releases).
+2. Extract the file and copy the **VolumeScroll** app to your **Applications** folder.
+   > **Note:** If you are downloading via Safari, it will automatically unzip the file for you. Just drag the downloaded app directly into Applications.
 
-## Build & Run
+## How to Use
+
+1. Run VolumeScroll. A volume icon displaying the volume percentage will appear in your menu bar.
+2. Hover your mouse pointer over the icon and scroll (using your mouse wheel or trackpad) to adjust the volume.
+
+## Troubleshooting
+
+### "VolumeScroll is damaged and should be moved to the Trash"
+
+This is a standard macOS security measure for unsigned apps downloaded outside the App Store. The app is completely safe. To fix it:
+
+1. Open the **Terminal** app.
+2. Paste the following command and press Return:
+   ```bash
+   xattr -cr /Applications/VolumeScroll.app
+   ```
+3. Launch VolumeScroll again!
+
+## Build & Run (only for people who want to build the app from source code)
 
 ```bash
 ./build.sh
 open build/VolumeScroll.app
 ```
 
-To install permanently:
+To install:
 
 ```bash
 cp -r build/VolumeScroll.app /Applications/
 ```
-
-## Project Structure
-
-```
-src/
-  main.swift          # App logic, menu bar view, CoreAudio integration
-  generate_icon.swift # Programmatically generates the app icon
-  Info.plist          # App bundle metadata
-build.sh              # Build script
-```
-
-## How It Works
-
-VolumeScroll uses CoreAudio to read and set the system output volume. It listens for device changes (e.g. plugging in headphones or switching to AirPlay) and automatically re-attaches its listeners to the new default output device.
