@@ -124,7 +124,8 @@ class VolumeBarView: NSView {
             let steps = Int(trackpadAccumulator / 4)
             guard steps != 0 else { return }
             trackpadAccumulator -= CGFloat(steps) * 4
-            onScroll?(steps)
+            // invert scroll direction
+            onScroll?(steps * -1)
         } else {
             let d = event.deltaY
             if d > 0.5       { onScroll?( 1) }
@@ -161,7 +162,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Scroll: optimistic update — display changes before the next read.
         barView.onScroll = { [weak self] steps in
             guard let self else { return }
-            let newVol = max(0, min(100, self.cachedVolume + steps * self.step))
+            let stepsSens = 15;
+            let newVol = max(0, min(100, self.cachedVolume + ((steps * self.step) * stepsSens / 100)))
             self.cachedVolume = newVol
             setVolume(newVol)
             self.barView.update(volume: newVol)
