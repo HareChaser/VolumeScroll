@@ -72,7 +72,7 @@ func symbolName(for volume: Int) -> String {
 // MARK: - Custom Status Bar View
 
 class VolumeBarView: NSView {
-    var onScroll: ((Int) -> Void)?
+    var onScroll: ((Int, Bool) -> Void)?
     var onRightClick: ((NSEvent) -> Void)?
     var onResize: ((CGFloat) -> Void)?
 
@@ -125,11 +125,11 @@ class VolumeBarView: NSView {
             guard steps != 0 else { return }
             trackpadAccumulator -= CGFloat(steps) * 4
             // invert scroll direction
-            onScroll?(steps * -1)
+            onScroll?(steps * -1, true)
         } else {
             let d = event.deltaY
-            if d > 0.5       { onScroll?( 1) }
-            else if d < -0.5 { onScroll?(-1) }
+            if d > 0.5       { onScroll?( 1, false) }
+            else if d < -0.5 { onScroll?(-1, false) }
         }
     }
 
@@ -160,10 +160,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         barView    = VolumeBarView(frame: NSRect(x: 0, y: 0, width: 60, height: barH))
 
         // Scroll: optimistic update — display changes before the next read.
-        barView.onScroll = { [weak self] steps in
+        barView.onScroll = { [weak self] steps, isTouchPad in
             guard let self else { return }
-            let stepsSens = 15;
-            let newVol = max(0, min(100, self.cachedVolume + ((steps * self.step) * stepsSens / 100)))
+            var newVol = self.cachedVolume
+
+            if (isTouchPad) {
+                let stepsReducer = 15
+                newVol = max(0, min(100, self.cachedVolume + ((steps * self.step) * stepsReducer / 100)))
+            } else {
+                newVol = max(0, min(100, self.cachedVolume + steps * self.step))
+            }
+
             self.cachedVolume = newVol
             setVolume(newVol)
             self.barView.update(volume: newVol)
