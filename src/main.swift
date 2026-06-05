@@ -86,8 +86,9 @@ class VolumeBarView: NSView {
 
     /// Volume-% applied per point of trackpad travel. Higher = faster.
     private let trackpadSensitivity: Double = 0.30 //Adjust trackpad sensitivity (value is % volume change per point of finger travel)
-    /// Volume-% per mouse-wheel detent.
-    private let wheelStep: Double = 2 //Adjust mouse wheel sensitivity (value is % volume change per wheel step)
+    /// Volume-% per line of mouse-wheel travel. macOS scales this by spin speed,
+    /// so fast spins accelerate just like the trackpad.
+    private let wheelSensitivity: Double = 2.0 //Adjust mouse wheel sensitivity (value is % volume change per line of scroll)
     private let iconPt: CGFloat = 13
     private let gap: CGFloat    = 3
     private let hPad: CGFloat   = 5
@@ -124,16 +125,17 @@ class VolumeBarView: NSView {
     override func scrollWheel(with event: NSEvent) {
         guard event.momentumPhase == [] else { return }   // ignore inertia overshoot
         if event.hasPreciseScrollingDeltas {
-            // Trackpad: map finger travel directly to a continuous volume delta.
-            // Negated so swiping up = louder (natural direction).
+            // Trackpad: continuous finger travel. Negated so swiping up = louder.
             let delta = -Double(event.scrollingDeltaY) * trackpadSensitivity
             guard delta != 0 else { return }
             onScroll?(delta)
         } else {
-            // Mouse wheel: one detent = one fixed step.
-            let d = event.deltaY
-            if d > 0.5       { onScroll?( wheelStep) }
-            else if d < -0.5 { onScroll?(-wheelStep) }
+            // Mouse wheel: velocity-proportional — macOS scales scrollingDeltaY by
+            // spin speed, so fast spins move faster instead of a flat per-detent step.
+            // Currently logically this is the same calculation as the trackpad, but separate in case we want to tweak sensitivities independently later.
+            let delta = -Double(event.scrollingDeltaY) * wheelSensitivity
+            guard delta != 0 else { return }
+            onScroll?(delta)
         }
     }
 
