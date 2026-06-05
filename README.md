@@ -2,6 +2,8 @@
 
 A lightweight macOS menu bar app that displays your system volume and lets you scroll over it to adjust the volume.
 
+https://github.com/user-attachments/assets/4e2d87d5-18f5-4e02-b889-5aeb47674eea
+
 ## Features
 
 - Shows a volume icon and percentage in the menu bar
