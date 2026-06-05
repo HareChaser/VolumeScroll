@@ -72,7 +72,8 @@ func symbolName(for volume: Int) -> String {
 // MARK: - Custom Status Bar View
 
 class VolumeBarView: NSView {
-    var onScroll: ((Int, Bool) -> Void)?
+    /// Carries a continuous volume delta (in percentage points).
+    var onScroll: ((Double) -> Void)?
     var onRightClick: ((NSEvent) -> Void)?
     var onResize: ((CGFloat) -> Void)?
 
@@ -83,7 +84,10 @@ class VolumeBarView: NSView {
         return tf
     }()
 
-    private var trackpadAccumulator: CGFloat = 0
+    /// Volume-% applied per point of trackpad travel. Higher = faster.
+    private let trackpadSensitivity: Double = 0.30 //Adjust trackpad sensitivity (value is % volume change per point of finger travel)
+    /// Volume-% per mouse-wheel detent.
+    private let wheelStep: Double = 2 //Adjust mouse wheel sensitivity (value is % volume change per wheel step)
     private let iconPt: CGFloat = 13
     private let gap: CGFloat    = 3
     private let hPad: CGFloat   = 5
@@ -118,18 +122,18 @@ class VolumeBarView: NSView {
     }
 
     override func scrollWheel(with event: NSEvent) {
-        guard event.momentumPhase == [] else { return }
+        guard event.momentumPhase == [] else { return }   // ignore inertia overshoot
         if event.hasPreciseScrollingDeltas {
-            trackpadAccumulator += event.scrollingDeltaY
-            let steps = Int(trackpadAccumulator / 4)
-            guard steps != 0 else { return }
-            trackpadAccumulator -= CGFloat(steps) * 4
-            // invert scroll direction
-            onScroll?(steps * -1, true)
+            // Trackpad: map finger travel directly to a continuous volume delta.
+            // Negated so swiping up = louder (natural direction).
+            let delta = -Double(event.scrollingDeltaY) * trackpadSensitivity
+            guard delta != 0 else { return }
+            onScroll?(delta)
         } else {
+            // Mouse wheel: one detent = one fixed step.
             let d = event.deltaY
-            if d > 0.5       { onScroll?( 1, false) }
-            else if d < -0.5 { onScroll?(-1, false) }
+            if d > 0.5       { onScroll?( wheelStep) }
+            else if d < -0.5 { onScroll?(-wheelStep) }
         }
     }
 
@@ -143,10 +147,13 @@ class VolumeBarView: NSView {
 class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var barView: VolumeBarView!
-    private let step = 5
 
-    /// Optimistic cache — updated instantly on scroll so the UI never waits for a read.
+    /// Integer volume currently shown — only changes (display + system) happen on whole-% crossings.
     private var cachedVolume = 50
+    /// Fractional volume accumulator so sub-1% trackpad movement is never lost.
+    private var preciseVolume: Double = 50
+    /// While scrolling we trust our own value; ignore CoreAudio echo until this time.
+    private var suppressRefreshUntil = Date.distantPast
     /// Coalesces rapid CoreAudio notifications (e.g. smooth slider drags).
     private var pendingRefresh: DispatchWorkItem?
     /// Tracks which device we're already listening to, to avoid duplicate listeners.
@@ -159,18 +166,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem = NSStatusBar.system.statusItem(withLength: 60)
         barView    = VolumeBarView(frame: NSRect(x: 0, y: 0, width: 60, height: barH))
 
-        // Scroll: optimistic update — display changes before the next read.
-        barView.onScroll = { [weak self] steps, isTouchPad in
+        // Scroll: accumulate fractionally, commit only when the rounded value changes.
+        barView.onScroll = { [weak self] delta in
             guard let self else { return }
-            var newVol = self.cachedVolume
+            self.preciseVolume = max(0, min(100, self.preciseVolume + delta))
+            // Keep CoreAudio's echo from clobbering our gesture for a moment.
+            self.suppressRefreshUntil = Date().addingTimeInterval(0.3)
 
-            if (isTouchPad) {
-                let stepsReducer = 15
-                newVol = max(0, min(100, self.cachedVolume + ((steps * self.step) * stepsReducer / 100)))
-            } else {
-                newVol = max(0, min(100, self.cachedVolume + steps * self.step))
-            }
-
+            let newVol = Int(self.preciseVolume.rounded())
+            guard newVol != self.cachedVolume else { return }   // no whole-% change yet
             self.cachedVolume = newVol
             setVolume(newVol)
             self.barView.update(volume: newVol)
@@ -264,10 +268,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05, execute: item)
     }
 
-    /// Reads the real volume from CoreAudio and syncs the display + cache.
+    /// Reads the real volume from CoreAudio and syncs the display + caches.
     private func hardRefresh() {
-        cachedVolume = getVolume()
-        barView.update(volume: cachedVolume)
+        // Mid-gesture: trust our own accumulator, ignore the hardware echo.
+        if Date() < suppressRefreshUntil { return }
+        let v = getVolume()
+        cachedVolume  = v
+        preciseVolume = Double(v)
+        barView.update(volume: v)
     }
 
     @objc private func quit() { NSApp.terminate(nil) }
