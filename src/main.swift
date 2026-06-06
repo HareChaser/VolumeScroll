@@ -89,37 +89,77 @@ class VolumeBarView: NSView {
     /// Volume-% per line of mouse-wheel travel. macOS scales this by spin speed,
     /// so fast spins accelerate just like the trackpad.
     private let wheelSensitivity: Double = 2.0 //Adjust mouse wheel sensitivity (value is % volume change per line of scroll)
-    private let iconPt: CGFloat = 13
-    private let gap: CGFloat    = 3
-    private let hPad: CGFloat   = 5
+    private let iconPt: CGFloat = 15      // SF Symbol point size — controls glyph height
+    private let gap: CGFloat    = 2       // space between icon and number
+    private let hPad: CGFloat   = 2       // inner left/right margin (menu bar adds its own spacing)
+    /// Natural size of the current symbol image (width varies; height stays consistent).
+    private var iconSize: NSSize = .zero
+    /// Fixed slot widths so the layout never changes size.
+    private var iconSlotW: CGFloat  = 0   // widest of all speaker symbols
+    private var labelW: CGFloat     = 0   // width of "100%" — reserved at all times
+
+    /// All symbols the icon can display — used to measure the widest one.
+    private static let allSymbols = [
+        "speaker.slash.fill", "speaker.fill",
+        "speaker.wave.1.fill", "speaker.wave.3.fill",
+    ]
 
     override init(frame: NSRect) {
         super.init(frame: frame)
-        iconView.imageScaling = .scaleProportionallyUpOrDown
+        // Frame matches the symbol's natural size, so nothing gets squished.
+        iconView.imageScaling = .scaleProportionallyDown
         addSubview(iconView)
         addSubview(label)
+        setupMetrics()
     }
     required init?(coder: NSCoder) { nil }
 
+    /// Measures the fixed slot widths once. The icon slot fits the widest symbol;
+    /// the label slot fits "100%", so neither shifts as the volume changes.
+    private func setupMetrics() {
+        let cfg = NSImage.SymbolConfiguration(pointSize: iconPt, weight: .regular)
+        let widest = Self.allSymbols.compactMap {
+            NSImage(systemSymbolName: $0, accessibilityDescription: nil)?
+                .withSymbolConfiguration(cfg)?.size.width
+        }.max() ?? iconPt
+        iconSlotW = ceil(widest)
+
+        // Reserve the 3-digit "100%" width permanently so the item never resizes.
+        let probe = NSTextField(labelWithString: "100%")
+        probe.font = label.font
+        probe.sizeToFit()
+        labelW = ceil(probe.frame.width)
+    }
+
     func update(volume: Int) {
         let cfg = NSImage.SymbolConfiguration(pointSize: iconPt, weight: .regular)
-        iconView.image = NSImage(systemSymbolName: symbolName(for: volume),
-                                 accessibilityDescription: nil)?
+        let img = NSImage(systemSymbolName: symbolName(for: volume),
+                          accessibilityDescription: nil)?
             .withSymbolConfiguration(cfg)
+        iconView.image = img
+        iconSize = img?.size ?? NSSize(width: iconPt, height: iconPt)
+
         label.stringValue = "\(volume)%"
         label.sizeToFit()
 
-        let w = ceil(hPad + iconPt + gap + label.frame.width + hPad)
+        // Width is built entirely from fixed slots, so it's constant at all volumes.
+        let w = hPad + iconSlotW + gap + labelW + hPad
         onResize?(w)
         layoutContent()
     }
 
     private func layoutContent() {
         let midY = bounds.midY
-        iconView.frame = NSRect(x: hPad, y: midY - iconPt/2, width: iconPt, height: iconPt)
-        label.frame    = NSRect(x: hPad + iconPt + gap,
+        // Icon left-anchored in its slot: the speaker body stays put while wave
+        // arcs extend right into the reserved space.
+        iconView.frame = NSRect(x: hPad,
+                                y: midY - iconSize.height/2,
+                                width: iconSize.width,
+                                height: iconSize.height)
+        // Label left-aligned in its fixed "100%" slot, so the item never resizes.
+        label.frame    = NSRect(x: hPad + iconSlotW + gap,
                                 y: midY - label.frame.height/2,
-                                width: label.frame.width, height: label.frame.height)
+                                width: labelW, height: label.frame.height)
     }
 
     override func scrollWheel(with event: NSEvent) {
