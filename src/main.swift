@@ -69,20 +69,18 @@ func symbolName(for volume: Int) -> String {
     }
 }
 
-// MARK: - Custom Status Bar View
+// MARK: - Status Item
+//
+// macOS 27 moved menu bar rendering into MenuBarAgent. A custom `statusItem.view`
+// is now snapshotted once and never receives events, so we drive the standard
+// button instead and catch scrolls with NSEvent monitors.
 
-class VolumeBarView: NSView {
+final class VolumeStatusItem {
     /// Carries a continuous volume delta (in percentage points).
     var onScroll: ((Double) -> Void)?
-    var onRightClick: ((NSEvent) -> Void)?
-    var onResize: ((CGFloat) -> Void)?
+    var onRightClick: (() -> Void)?
 
-    private let iconView = NSImageView()
-    private let label: NSTextField = {
-        let tf = NSTextField(labelWithString: "")
-        tf.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
-        return tf
-    }()
+    let item: NSStatusItem
 
     /// Volume-% applied per point of trackpad travel. Higher = faster.
     private let trackpadSensitivity: Double = 0.30 //Adjust trackpad sensitivity (value is % volume change per point of finger travel)
@@ -90,13 +88,10 @@ class VolumeBarView: NSView {
     /// so fast spins accelerate just like the trackpad.
     private let wheelSensitivity: Double = 2.0 //Adjust mouse wheel sensitivity (value is % volume change per line of scroll)
     private let iconPt: CGFloat = 15      // SF Symbol point size — controls glyph height
-    private let gap: CGFloat    = 2       // space between icon and number
-    private let hPad: CGFloat   = 2       // inner left/right margin (menu bar adds its own spacing)
-    /// Natural size of the current symbol image (width varies; height stays consistent).
-    private var iconSize: NSSize = .zero
-    /// Fixed slot widths so the layout never changes size.
-    private var iconSlotW: CGFloat  = 0   // widest of all speaker symbols
-    private var labelW: CGFloat     = 0   // width of "100%" — reserved at all times
+    private let font = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .regular)
+    /// Fixed icon canvas fitting the widest/tallest symbol, so the item never resizes.
+    private var iconSlot: NSSize = .zero
+    private var monitors: [Any] = []
 
     /// All symbols the icon can display — used to measure the widest one.
     private static let allSymbols = [
@@ -104,66 +99,69 @@ class VolumeBarView: NSView {
         "speaker.wave.1.fill", "speaker.wave.3.fill",
     ]
 
-    override init(frame: NSRect) {
-        super.init(frame: frame)
-        // Frame matches the symbol's natural size, so nothing gets squished.
-        iconView.imageScaling = .scaleProportionallyDown
-        addSubview(iconView)
-        addSubview(label)
-        setupMetrics()
+    init() {
+        item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        let sizes = Self.allSymbols.compactMap { symbol($0)?.size }
+        iconSlot = NSSize(width:  ceil(sizes.map(\.width).max()  ?? iconPt),
+                          height: ceil(sizes.map(\.height).max() ?? iconPt))
+
+        if let button = item.button {
+            button.imagePosition = .imageLeft
+            button.target = self
+            button.action = #selector(buttonClicked)
+            button.sendAction(on: [.rightMouseUp])
+        }
+
+        // macOS 27+: scrolls over the item are delivered to MenuBarAgent, so only a
+        // global monitor sees them. macOS ≤ 26: they reach our own status window.
+        if let m = NSEvent.addGlobalMonitorForEvents(matching: .scrollWheel, handler: { [weak self] e in
+            self?.handleScroll(e)
+        }) { monitors.append(m) }
+        if let m = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel, handler: { [weak self] e in
+            self?.handleScroll(e)
+            return e
+        }) { monitors.append(m) }
     }
-    required init?(coder: NSCoder) { nil }
 
-    /// Measures the fixed slot widths once. The icon slot fits the widest symbol;
-    /// the label slot fits "100%", so neither shifts as the volume changes.
-    private func setupMetrics() {
+    deinit { monitors.forEach(NSEvent.removeMonitor) }
+
+    private func symbol(_ name: String) -> NSImage? {
         let cfg = NSImage.SymbolConfiguration(pointSize: iconPt, weight: .regular)
-        let widest = Self.allSymbols.compactMap {
-            NSImage(systemSymbolName: $0, accessibilityDescription: nil)?
-                .withSymbolConfiguration(cfg)?.size.width
-        }.max() ?? iconPt
-        iconSlotW = ceil(widest)
-
-        // Reserve the 3-digit "100%" width permanently so the item never resizes.
-        let probe = NSTextField(labelWithString: "100%")
-        probe.font = label.font
-        probe.sizeToFit()
-        labelW = ceil(probe.frame.width)
+        return NSImage(systemSymbolName: name, accessibilityDescription: nil)?
+            .withSymbolConfiguration(cfg)
     }
 
     func update(volume: Int) {
-        let cfg = NSImage.SymbolConfiguration(pointSize: iconPt, weight: .regular)
-        let img = NSImage(systemSymbolName: symbolName(for: volume),
-                          accessibilityDescription: nil)?
-            .withSymbolConfiguration(cfg)
-        iconView.image = img
-        iconSize = img?.size ?? NSSize(width: iconPt, height: iconPt)
+        guard let button = item.button else { return }
 
-        label.stringValue = "\(volume)%"
-        label.sizeToFit()
-
-        // Width is built entirely from fixed slots, so it's constant at all volumes.
-        let w = hPad + iconSlotW + gap + labelW + hPad
-        onResize?(w)
-        layoutContent()
-    }
-
-    private func layoutContent() {
-        let midY = bounds.midY
-        // Icon left-anchored in its slot: the speaker body stays put while wave
+        // Icon left-anchored in a fixed canvas: the speaker body stays put while wave
         // arcs extend right into the reserved space.
-        iconView.frame = NSRect(x: hPad,
-                                y: midY - iconSize.height/2,
-                                width: iconSize.width,
-                                height: iconSize.height)
-        // Label left-aligned in its fixed "100%" slot, so the item never resizes.
-        label.frame    = NSRect(x: hPad + iconSlotW + gap,
-                                y: midY - label.frame.height/2,
-                                width: labelW, height: label.frame.height)
+        if let sym = symbol(symbolName(for: volume)) {
+            let slot = iconSlot
+            let img = NSImage(size: slot, flipped: false) { r in
+                sym.draw(in: NSRect(x: 0, y: (r.height - sym.size.height) / 2,
+                                    width: sym.size.width, height: sym.size.height))
+                return true
+            }
+            img.isTemplate = true
+            button.image = img
+        }
+
+        // Pad with figure spaces (digit-width) so "5%" takes the same room as "100%".
+        let text = "\(volume)%"
+        let pad = String(repeating: "\u{2007}", count: max(0, 4 - text.count))
+        button.attributedTitle = NSAttributedString(string: text + pad,
+                                                    attributes: [.font: font])
+        button.setAccessibilityLabel("Volume \(volume)%")
     }
 
-    override func scrollWheel(with event: NSEvent) {
-        guard event.momentumPhase == [] else { return }   // ignore inertia overshoot
+    private func handleScroll(_ event: NSEvent) {
+        guard event.momentumPhase == [],                     // ignore inertia overshoot
+              let button = item.button, let window = button.window,
+              window.convertToScreen(button.convert(button.bounds, to: nil))
+                  .contains(NSEvent.mouseLocation)
+        else { return }
+
         if event.hasPreciseScrollingDeltas {
             // Trackpad: continuous finger travel. Negated so swiping up = louder.
             let delta = -Double(event.scrollingDeltaY) * trackpadSensitivity
@@ -179,16 +177,20 @@ class VolumeBarView: NSView {
         }
     }
 
-    override func rightMouseDown(with event: NSEvent) { onRightClick?(event) }
-    override var acceptsFirstResponder: Bool { true }
-    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    @objc private func buttonClicked() { onRightClick?() }
+
+    /// Shows `menu` anchored to the status item (one-shot, so left-click stays inert).
+    func popUp(_ menu: NSMenu) {
+        item.menu = menu
+        item.button?.performClick(nil)
+        item.menu = nil
+    }
 }
 
 // MARK: - App Delegate
 
 class AppDelegate: NSObject, NSApplicationDelegate {
-    private var statusItem: NSStatusItem!
-    private var barView: VolumeBarView!
+    private var statusItem: VolumeStatusItem!
 
     /// Integer volume currently shown — only changes (display + system) happen on whole-% crossings.
     private var cachedVolume = 50
@@ -204,12 +206,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
 
-        let barH = NSStatusBar.system.thickness
-        statusItem = NSStatusBar.system.statusItem(withLength: 60)
-        barView    = VolumeBarView(frame: NSRect(x: 0, y: 0, width: 60, height: barH))
+        statusItem = VolumeStatusItem()
 
         // Scroll: accumulate fractionally, commit only when the rounded value changes.
-        barView.onScroll = { [weak self] delta in
+        statusItem.onScroll = { [weak self] delta in
             guard let self else { return }
             self.preciseVolume = max(0, min(100, self.preciseVolume + delta))
             // Keep CoreAudio's echo from clobbering our gesture for a moment.
@@ -219,26 +219,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             guard newVol != self.cachedVolume else { return }   // no whole-% change yet
             self.cachedVolume = newVol
             setVolume(newVol)
-            self.barView.update(volume: newVol)
+            self.statusItem.update(volume: newVol)
         }
 
-        barView.onRightClick = { [weak self] event in
+        statusItem.onRightClick = { [weak self] in
             guard let self else { return }
             let menu = NSMenu()
             let quit = NSMenuItem(title: "Quit VolumeScroll",
                                   action: #selector(self.quit), keyEquivalent: "")
             quit.target = self
             menu.addItem(quit)
-            NSMenu.popUpContextMenu(menu, with: event, for: self.barView)
+            self.statusItem.popUp(menu)
         }
-
-        barView.onResize = { [weak self] w in
-            guard let self else { return }
-            self.statusItem.length       = w
-            self.barView.frame.size.width = w
-        }
-
-        statusItem.view = barView   // deprecated but the only way to capture scroll events
 
         setupAudioObservers()
         hardRefresh()
@@ -317,7 +309,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let v = getVolume()
         cachedVolume  = v
         preciseVolume = Double(v)
-        barView.update(volume: v)
+        statusItem.update(volume: v)
     }
 
     @objc private func quit() { NSApp.terminate(nil) }
